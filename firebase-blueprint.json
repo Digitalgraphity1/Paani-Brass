@@ -1,0 +1,47 @@
+{
+  "entities": {
+    "Lead": {
+      "title": "Lead",
+      "description": "A visitor lead captured during the exhibition.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Full name of the visitor"
+        },
+        "mobile": {
+          "type": "string",
+          "description": "Mobile number of the visitor"
+        },
+        "inquiry": {
+          "type": "string",
+          "description": "Product category the visitor is interested in"
+        },
+        "notes": {
+          "type": "string",
+          "description": "Additional notes about the inquiry"
+        },
+        "cardImage": {
+          "type": "string",
+          "description": "Base64 encoded compressed image of the visiting card"
+        },
+        "staffName": {
+          "type": "string",
+          "description": "Name of the staff member who recorded the lead"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when the lead was captured"
+        }
+      },
+      "required": ["name", "mobile", "inquiry", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/leads/{leadId}": {
+      "schema": "Lead",
+      "description": "Collection of visitor leads"
+    }
+  }
+}

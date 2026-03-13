@@ -1,0 +1,23 @@
+@import "tailwindcss";
+
+@theme {
+  --color-brass-50: #fdf8e1;
+  --color-brass-100: #f9ebb2;
+  --color-brass-200: #f4db84;
+  --color-brass-300: #eecb56;
+  --color-brass-400: #e8bb28;
+  --color-brass-500: #c5a028;
+  --color-brass-600: #a6821d;
+  --color-brass-700: #876414;
+  --color-brass-800: #68460b;
+  --color-brass-900: #492802;
+
+  @keyframes spin-slow {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+}
+
+.animate-spin-slow {
+  animation: spin-slow 3s linear infinite;
+}

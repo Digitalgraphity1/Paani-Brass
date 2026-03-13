@@ -1,0 +1,5 @@
+{
+  "name": "Paani Lead Capture",
+  "description": "Lead capture and visitor management application for Paani Precision Products LLP exhibition.",
+  "requestFramePermissions": ["camera"]
+}

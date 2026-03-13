@@ -1,0 +1,45 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    // Collection: leads
+    // Document ID: auto-generated
+    // Fields:
+    //   - name: string (required, 1-100 chars)
+    //   - mobile: string (required, 10-15 chars)
+    //   - inquiry: string (required, 1-100 chars)
+    //   - notes: string (optional, 0-500 chars)
+    //   - createdAt: timestamp (required)
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isValidLead(data) {
+      return data.keys().hasAll(['name', 'mobile', 'inquiry', 'staffName', 'createdAt']) &&
+             data.name is string && data.name.size() > 0 && data.name.size() <= 100 &&
+             data.mobile is string && data.mobile.size() >= 10 && data.mobile.size() <= 15 &&
+             data.inquiry is string && data.inquiry.size() > 0 && data.inquiry.size() <= 100 &&
+             data.staffName is string && data.staffName.size() > 0 && data.staffName.size() <= 100 &&
+             ( !('notes' in data) || (data.notes is string && data.notes.size() <= 500) ) &&
+             ( !('cardImage' in data) || (data.cardImage is string && data.cardImage.size() <= 200000) ) &&
+             data.createdAt is timestamp;
+    }
+
+    match /leads/{leadId} {
+      // For an exhibition app, we might allow anonymous capture if configured, 
+      // but following best practices we require auth.
+      // Assuming the staff member using the app is logged in.
+      allow read, list: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidLead(request.resource.data);
+      allow update, delete: if isAuthenticated();
+    }
+    
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+  }
+}
