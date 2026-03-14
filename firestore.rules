@@ -19,23 +19,22 @@ service cloud.firestore {
     }
 
     function isValidLead(data) {
-      return data.keys().hasAll(['name', 'mobile', 'inquiry', 'staffName', 'createdAt']) &&
-             data.name is string && data.name.size() > 0 && data.name.size() <= 100 &&
+      return data.keys().hasAll(['mobile', 'createdAt']) &&
              data.mobile is string && data.mobile.size() >= 10 && data.mobile.size() <= 15 &&
-             data.inquiry is string && data.inquiry.size() > 0 && data.inquiry.size() <= 100 &&
-             data.staffName is string && data.staffName.size() > 0 && data.staffName.size() <= 100 &&
+             ( !('name' in data) || (data.name is string && data.name.size() <= 100) ) &&
+             ( !('inquiry' in data) || (data.inquiry is string && data.inquiry.size() <= 100) ) &&
+             ( !('staffName' in data) || (data.staffName is string && data.staffName.size() <= 100) ) &&
+             ( !('city' in data) || (data.city is string && data.city.size() <= 100) ) &&
              ( !('notes' in data) || (data.notes is string && data.notes.size() <= 500) ) &&
              ( !('cardImage' in data) || (data.cardImage is string && data.cardImage.size() <= 200000) ) &&
              data.createdAt is timestamp;
     }
 
     match /leads/{leadId} {
-      // For an exhibition app, we might allow anonymous capture if configured, 
-      // but following best practices we require auth.
-      // Assuming the staff member using the app is logged in.
-      allow read, list: if isAuthenticated();
-      allow create: if isAuthenticated() && isValidLead(request.resource.data);
-      allow update, delete: if isAuthenticated();
+      // Exhibition mode: Allow public access for easy use without login
+      allow read, list: if true;
+      allow create: if isValidLead(request.resource.data);
+      allow update, delete: if true;
     }
     
     match /users/{userId} {

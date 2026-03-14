@@ -11,20 +11,14 @@ import {
   query, 
   orderBy, 
   limit, 
-  onSnapshot
+  onSnapshot,
+  updateDoc,
+  doc
 } from 'firebase/firestore';
-import { 
-  signInWithPopup, 
-  GoogleAuthProvider, 
-  onAuthStateChanged, 
-  signOut,
-  User
-} from 'firebase/auth';
 import { db, auth } from './firebase';
 import { GoogleGenAI } from "@google/genai";
 import { 
   UserCircle, 
-  LogOut, 
   PlusCircle, 
   Send, 
   MessageCircle, 
@@ -43,7 +37,8 @@ import {
   Wifi,
   WifiOff,
   Settings,
-  ChevronRight
+  ChevronRight,
+  MapPin
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -54,17 +49,17 @@ function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-// Product categories with visuals
+// Product categories
 const PRODUCT_CATEGORIES = [
-  { name: "Precision Brass Components", image: "https://images.unsplash.com/photo-1581091226825-a6a2a5aee158?w=100&h=100&fit=crop" },
-  { name: "Brass Valve", image: "https://images.unsplash.com/photo-1581092160562-40aa08e78837?w=100&h=100&fit=crop" },
-  { name: "Brass Fasteners", image: "https://images.unsplash.com/photo-1581092918056-0c4c3acd3789?w=100&h=100&fit=crop" },
-  { name: "Brass Hardware Components", image: "https://images.unsplash.com/photo-1581092162384-8987c1d64718?w=100&h=100&fit=crop" },
-  { name: "Brass Fitting Parts", image: "https://images.unsplash.com/photo-1581093458791-9f3c3900df4b?w=100&h=100&fit=crop" },
-  { name: "Decorative Metal Parts", image: "https://images.unsplash.com/photo-1581092580497-e0d23cbdf1dc?w=100&h=100&fit=crop" },
-  { name: "Brass Auto Components", image: "https://images.unsplash.com/photo-1581092335397-9583eb92d232?w=100&h=100&fit=crop" },
-  { name: "Brass Table Flag Stand", image: "https://images.unsplash.com/photo-1581092160562-40aa08e78837?w=100&h=100&fit=crop" },
-  { name: "Other / Custom Requirement", image: "https://images.unsplash.com/photo-1581091226825-a6a2a5aee158?w=100&h=100&fit=crop" }
+  "Precision Brass Components",
+  "Brass Valve",
+  "Brass Fasteners",
+  "Brass Hardware Components",
+  "Brass Fitting Parts",
+  "Decorative Metal Parts",
+  "Brass Auto Components",
+  "Brass Table Flag Stand",
+  "Other / Custom Requirement"
 ];
 
 const STAFF_NAMES = [
@@ -84,6 +79,7 @@ interface Lead {
   id?: string;
   name: string;
   mobile: string;
+  city: string;
   inquiry: string;
   notes?: string;
   cardImage?: string;
@@ -92,7 +88,6 @@ interface Lead {
 }
 
 export default function App() {
-  const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [lastSavedLead, setLastSavedLead] = useState<Lead | null>(null);
@@ -102,8 +97,11 @@ export default function App() {
   const [showCamera, setShowCamera] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [isProcessingOCR, setIsProcessingOCR] = useState(false);
+  const [isCompressing, setIsCompressing] = useState(false);
   const [pendingLeads, setPendingLeads] = useState<Lead[]>([]);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [editingLeadId, setEditingLeadId] = useState<string | null>(null);
+  const [previewLead, setPreviewLead] = useState<Lead | null>(null);
   
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -112,7 +110,8 @@ export default function App() {
   const [formData, setFormData] = useState({
     name: '',
     mobile: '',
-    inquiry: PRODUCT_CATEGORIES[0].name,
+    city: '',
+    inquiry: PRODUCT_CATEGORIES[0],
     notes: '',
     cardImage: '',
     staffName: STAFF_NAMES[0]
@@ -161,16 +160,10 @@ export default function App() {
   };
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (u) => {
-      setUser(u);
-      setLoading(false);
-    });
-    return () => unsubscribe();
+    setLoading(false);
   }, []);
 
   useEffect(() => {
-    if (!user) return;
-
     const q = query(collection(db, 'leads'), orderBy('createdAt', 'desc'), limit(10));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const leads = snapshot.docs.map(doc => ({
@@ -181,24 +174,39 @@ export default function App() {
     }, (err) => {
       console.error("Firestore error:", err);
       if (err.message.includes('permission-denied')) {
-        setError("Access denied. Please ensure you are an authorized staff member.");
+        setError("Access denied. Please ensure firestore rules allow public access.");
       }
     });
 
     return () => unsubscribe();
-  }, [user]);
+  }, []);
 
-  const handleLogin = async () => {
-    try {
-      const provider = new GoogleAuthProvider();
-      await signInWithPopup(auth, provider);
-    } catch (err) {
-      console.error("Login error:", err);
-      setError("Failed to sign in. Please try again.");
-    }
+  const resetForm = () => {
+    setEditingLeadId(null);
+    setFormData({
+      name: '',
+      mobile: '',
+      city: '',
+      inquiry: PRODUCT_CATEGORIES[0],
+      notes: '',
+      cardImage: '',
+      staffName: formData.staffName
+    });
   };
 
-  const handleLogout = () => signOut(auth);
+  const handleEditLead = (lead: Lead) => {
+    setEditingLeadId(lead.id || null);
+    setFormData({
+      name: lead.name,
+      mobile: lead.mobile,
+      city: lead.city || '',
+      inquiry: lead.inquiry,
+      notes: lead.notes || '',
+      cardImage: lead.cardImage || '',
+      staffName: lead.staffName
+    });
+    setView('form');
+  };
 
   const startCamera = async () => {
     setShowCamera(true);
@@ -225,6 +233,51 @@ export default function App() {
     setShowCamera(false);
   };
 
+  const compressImage = (base64Str: string, maxWidth = 1024, quality = 0.5): Promise<string> => {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.src = base64Str;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+
+        if (width > maxWidth) {
+          height = (maxWidth / width) * height;
+          width = maxWidth;
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx?.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+    });
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsCompressing(true);
+    try {
+      const reader = new FileReader();
+      reader.onload = async (event) => {
+        const base64 = event.target?.result as string;
+        const compressed = await compressImage(base64);
+        setFormData({ ...formData, cardImage: compressed });
+        handleOCR(compressed);
+      };
+      reader.readAsDataURL(file);
+    } catch (err) {
+      console.error("Upload error:", err);
+      setError("Failed to process image.");
+    } finally {
+      setIsCompressing(false);
+    }
+  };
+
   const capturePhoto = async () => {
     if (videoRef.current && canvasRef.current) {
       const video = videoRef.current;
@@ -232,18 +285,22 @@ export default function App() {
       const context = canvas.getContext('2d');
 
       if (context) {
-        const maxWidth = 800;
-        const scale = maxWidth / video.videoWidth;
-        canvas.width = maxWidth;
-        canvas.height = video.videoHeight * scale;
-
+        // Capture at high res first
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
         context.drawImage(video, 0, 0, canvas.width, canvas.height);
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
-        setFormData({ ...formData, cardImage: dataUrl });
+        const rawData = canvas.toDataURL('image/jpeg', 0.9);
+        
         stopCamera();
+        setIsCompressing(true);
+        
+        // Then compress
+        const compressedData = await compressImage(rawData, 1024, 0.5);
+        setFormData({ ...formData, cardImage: compressedData });
+        setIsCompressing(false);
 
         // Start OCR
-        handleOCR(dataUrl);
+        handleOCR(compressedData);
       }
     }
   };
@@ -260,7 +317,7 @@ export default function App() {
         model: "gemini-3-flash-preview",
         contents: {
           parts: [
-            { text: "Extract the Visitor's Name and Mobile Number from this business card. Return ONLY a valid JSON object like: { \"name\": \"...\", \"mobile\": \"...\" }. If a field is not found, use an empty string. Do not include any other text or markdown formatting." },
+            { text: "Extract the Visitor's Name, Mobile Number, and City from this business card. Return ONLY a valid JSON object like: { \"name\": \"...\", \"mobile\": \"...\", \"city\": \"...\" }. If a field is not found, use an empty string. Do not include any other text or markdown formatting." },
             { inlineData: { data: base64Image.split(',')[1], mimeType: "image/jpeg" } }
           ]
         }
@@ -274,7 +331,8 @@ export default function App() {
           setFormData(prev => ({
             ...prev,
             name: data.name || prev.name,
-            mobile: data.mobile || prev.mobile
+            mobile: data.mobile || prev.mobile,
+            city: data.city || prev.city
           }));
         } catch (e) {
           console.error("JSON Parse Error:", e, text);
@@ -289,7 +347,13 @@ export default function App() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user) return;
+
+    // Mobile number validation: exactly 10 digits
+    const mobileRegex = /^\d{10}$/;
+    if (!mobileRegex.test(formData.mobile)) {
+      setError("Mobile number must be exactly 10 digits.");
+      return;
+    }
 
     setSubmitting(true);
     setError(null);
@@ -297,13 +361,25 @@ export default function App() {
     try {
       const leadData = {
         ...formData,
-        createdAt: isOnline ? serverTimestamp() : new Date().toISOString()
+        createdAt: editingLeadId ? (recentLeads.find(l => l.id === editingLeadId)?.createdAt || serverTimestamp()) : (isOnline ? serverTimestamp() : new Date().toISOString())
       };
 
       if (isOnline) {
-        const docRef = await addDoc(collection(db, 'leads'), leadData);
-        setLastSavedLead({ id: docRef.id, ...leadData });
+        if (editingLeadId) {
+          await updateDoc(doc(db, 'leads', editingLeadId), leadData);
+          setLastSavedLead({ id: editingLeadId, ...leadData });
+        } else {
+          const docRef = await addDoc(collection(db, 'leads'), leadData);
+          setLastSavedLead({ id: docRef.id, ...leadData });
+        }
       } else {
+        if (editingLeadId) {
+          // For offline editing, we'd need more complex logic, but for now let's just treat as new if offline
+          // or ideally we don't allow offline edit of synced leads easily without more state
+          setError("Editing is only available while online.");
+          setSubmitting(false);
+          return;
+        }
         const offlineLead = { ...leadData, id: 'offline-' + Date.now() };
         const newPending = [...pendingLeads, offlineLead];
         setPendingLeads(newPending);
@@ -311,14 +387,7 @@ export default function App() {
         setLastSavedLead(offlineLead);
       }
 
-      setFormData({ 
-        name: '', 
-        mobile: '', 
-        inquiry: PRODUCT_CATEGORIES[0].name, 
-        notes: '', 
-        cardImage: '',
-        staffName: formData.staffName
-      });
+      resetForm();
       setView('success');
     } catch (err) {
       console.error("Submit error:", err);
@@ -331,23 +400,30 @@ export default function App() {
   const shareOnWhatsApp = () => {
     if (!lastSavedLead) return;
 
-    const message = `Hi ${lastSavedLead.name}, thank you for visiting Paani Precision Products LLP at the exhibition. We have noted your inquiry about ${lastSavedLead.inquiry}. Our team will get in touch with you soon.\n\nVisit our website: https://www.paaniprecisions.com/`;
+    const message = `*Namaste ${lastSavedLead.name}!* 🙏\n\nIt was a pleasure meeting you at our exhibition booth today! 😊\n\nAt Paani Precision Products LLP, we are committed to delivering excellence in technology. 💧⚙️\n\nAs discussed, you can explore our complete product range and digital catalog here:\n👉 https://sites.google.com/view/paaniprecisionqr\n\nWe look forward to a fruitful association with you. 🤝\n\n*Best Regards,*\nPaani Precision Products LLP.\nS.R. No. 53, Plot No. 5/B-1 &\n5/B-2, Raj Rajeshwari Estate,\nPrivate Zone, Kansumra Road,\nNear Apna Rajdhani Hotel,\nKansumra, Jamnagar - 361001,\nGujarat, India.\n\n+91-9408324979\nhttps://www.paaniprecisions.com/\ninfo@paaniprecisions.com`;
     
     // Clean mobile number (remove non-digits)
-    const cleanMobile = lastSavedLead.mobile.replace(/\D/g, '');
+    let cleanMobile = lastSavedLead.mobile.replace(/\D/g, '');
+    
+    // Automatically prepend 91 for 10-digit Indian numbers
+    if (cleanMobile.length === 10) {
+      cleanMobile = `91${cleanMobile}`;
+    }
+    
     const whatsappUrl = `https://wa.me/${cleanMobile}?text=${encodeURIComponent(message)}`;
     
     window.open(whatsappUrl, '_blank');
   };
 
   const exportToCSV = () => {
-    const headers = ["Date", "Time", "Staff", "Visitor", "Mobile", "Inquiry", "Notes"];
+    const headers = ["Date", "Time", "Staff", "Visitor", "Mobile", "City", "Inquiry", "Notes"];
     const rows = recentLeads.map(l => [
       l.createdAt?.toDate ? l.createdAt.toDate().toLocaleDateString() : (typeof l.createdAt === 'string' ? new Date(l.createdAt).toLocaleDateString() : ''),
       l.createdAt?.toDate ? l.createdAt.toDate().toLocaleTimeString() : (typeof l.createdAt === 'string' ? new Date(l.createdAt).toLocaleTimeString() : ''),
       l.staffName,
       l.name,
       l.mobile,
+      l.city || '',
       l.inquiry,
       l.notes || ''
     ]);
@@ -370,127 +446,141 @@ export default function App() {
         transition={{ duration: 4, repeat: Infinity, ease: "linear" }}
         className="absolute inset-0 flex items-center justify-center"
       >
-        <Settings className="w-20 h-20 text-brass-500 opacity-20" />
+        <Settings className="w-20 h-20 text-navy-200" />
       </motion.div>
       <motion.div
         animate={{ rotate: -360 }}
         transition={{ duration: 3, repeat: Infinity, ease: "linear" }}
         className="absolute inset-0 flex items-center justify-center"
       >
-        <Settings className="w-12 h-12 text-brass-600" />
+        <Settings className="w-12 h-12 text-navy-500" />
       </motion.div>
       <div className="absolute inset-0 flex items-center justify-center">
-        <span className="text-brass-800 font-black text-xl">P</span>
+        <span className="text-brass-500 font-black text-xl">P</span>
       </div>
     </div>
   );
 
-  if (loading) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-brass-50">
-        <GearLoader />
-        <p className="mt-4 text-brass-800 font-bold animate-pulse">Initializing Paani Lead System...</p>
-      </div>
-    );
-  }
-
-  if (!user) {
-    return (
-      <div className="min-h-screen bg-brass-900 flex flex-col items-center justify-center p-6 relative overflow-hidden">
-        <div className="absolute top-0 left-0 w-full h-full opacity-10 pointer-events-none">
-          <div className="absolute top-10 left-10 w-64 h-64 bg-brass-400 rounded-full blur-3xl" />
-          <div className="absolute bottom-10 right-10 w-96 h-96 bg-brass-600 rounded-full blur-3xl" />
+  const ImagePreviewModal = ({ lead, onClose }: { lead: Lead, onClose: () => void }) => (
+    <motion.div 
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-navy-950/90 backdrop-blur-md"
+    >
+      <motion.div 
+        initial={{ scale: 0.9, y: 20 }}
+        animate={{ scale: 1, y: 0 }}
+        className="bg-white rounded-3xl overflow-hidden max-w-lg w-full shadow-2xl border border-white/20"
+      >
+        <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+          <div>
+            <h3 className="text-navy-900 font-black text-sm uppercase tracking-wider">{lead.name}</h3>
+            <p className="text-slate-400 text-[10px] font-bold uppercase tracking-tight">{lead.mobile}</p>
+          </div>
+          <button 
+            onClick={onClose}
+            className="p-2 hover:bg-slate-100 rounded-full transition-colors text-slate-400"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        
+        <div className="p-6 bg-slate-50 flex items-center justify-center min-h-[300px]">
+          {lead.cardImage ? (
+            <img 
+              src={lead.cardImage} 
+              className="max-w-full max-h-[60vh] object-contain rounded-xl shadow-lg border border-white" 
+              alt="Visiting Card" 
+              referrerPolicy="no-referrer"
+            />
+          ) : (
+            <div className="flex flex-col items-center gap-3 text-slate-300">
+              <ImageIcon className="w-16 h-16" />
+              <p className="text-xs font-bold uppercase tracking-widest">No Image Available</p>
+            </div>
+          )}
         </div>
 
-        <motion.div 
-          initial={{ opacity: 0, scale: 0.9 }}
-          animate={{ opacity: 1, scale: 1 }}
-          className="w-full max-w-md bg-white/95 backdrop-blur-xl rounded-[2.5rem] shadow-2xl p-10 border border-brass-200 relative z-10"
-        >
-          <div className="flex flex-col items-center mb-10">
-            <div className="w-20 h-20 bg-gradient-to-tr from-brass-400 to-brass-600 rounded-3xl flex items-center justify-center mb-6 shadow-lg rotate-3">
-              <img 
-                src="https://www.paaniprecisions.com/images/logo.png" 
-                alt="Logo" 
-                className="w-12 h-12 object-contain brightness-0 invert"
-                referrerPolicy="no-referrer"
-              />
-            </div>
-            <h1 className="text-3xl font-black text-brass-900 text-center tracking-tight">Paani Precision</h1>
-            <p className="text-brass-600 text-center mt-2 font-medium">Exhibition Lead Management</p>
-          </div>
-
+        <div className="p-4 bg-white border-t border-slate-100 flex gap-3">
           <button
-            onClick={handleLogin}
-            className="w-full bg-gradient-to-r from-brass-600 to-brass-800 hover:from-brass-700 hover:to-brass-900 text-white font-bold py-5 rounded-2xl transition-all flex items-center justify-center gap-4 shadow-xl shadow-brass-200 group relative overflow-hidden"
+            onClick={() => {
+              handleEditLead(lead);
+              onClose();
+              setTimeout(() => startCamera(), 100);
+            }}
+            className="flex-1 bg-navy-600 text-white py-3 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-navy-700 transition-all flex items-center justify-center gap-2 shadow-lg shadow-navy-100"
           >
-            <motion.div
-              className="absolute inset-0 bg-white/20 -skew-x-12"
-              animate={{ x: ['-100%', '200%'] }}
-              transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
-            />
-            <div className="bg-white rounded-full p-1 group-hover:scale-110 transition-transform relative z-10">
-              <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-5 h-5" alt="Google" />
-            </div>
-            <span className="relative z-10">Sign in to Dashboard</span>
+            <Camera className="w-4 h-4" />
+            Replace Image
           </button>
-          
-          <div className="mt-10 flex items-center justify-center gap-2">
-            <div className="h-px w-8 bg-brass-100" />
-            <p className="text-[10px] text-brass-400 font-bold uppercase tracking-[0.2em]">Authorized Personnel Only</p>
-            <div className="h-px w-8 bg-brass-100" />
-          </div>
-        </motion.div>
+          <button
+            onClick={onClose}
+            className="px-6 py-3 rounded-2xl font-black text-xs uppercase tracking-widest text-slate-400 hover:bg-slate-50 transition-all border border-slate-100"
+          >
+            Close
+          </button>
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50">
+        <GearLoader />
+        <p className="mt-4 text-navy-900 font-bold animate-pulse">Initializing Paani Lead System...</p>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-brass-50 text-stone-900 font-sans selection:bg-brass-100 selection:text-brass-900">
+    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans selection:bg-navy-100 selection:text-navy-900">
       {/* Header */}
-      <header className="bg-white/90 backdrop-blur-xl border-b border-brass-100 sticky top-0 z-30 shadow-sm">
-        <div className="max-w-4xl mx-auto px-6 h-20 flex items-center justify-between">
+      <header className="bg-navy-600 text-white sticky top-0 z-30 shadow-lg shadow-navy-100">
+        <div className="max-w-5xl mx-auto px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-12 h-12 bg-brass-600 rounded-xl flex items-center justify-center shadow-lg shadow-brass-200 overflow-hidden">
+            <div className="w-10 h-10 bg-white rounded-lg flex items-center justify-center shadow-lg overflow-hidden">
               <img 
                 src="https://www.paaniprecisions.com/images/logo.png" 
                 alt="Paani Logo" 
-                className="w-full h-full object-contain p-1 bg-white"
+                className="w-full h-full object-contain p-1"
                 referrerPolicy="no-referrer"
               />
             </div>
             <div>
-              <span className="font-black text-xl tracking-tighter text-brass-900 block leading-none">Paani</span>
-              <span className="text-[10px] font-bold text-brass-500 uppercase tracking-widest">Precision Products LLP</span>
+              <span className="font-black text-lg tracking-tight text-white block leading-none">Paani Precision</span>
+              <span className="text-[9px] font-black text-navy-100 uppercase tracking-[0.2em]">Products LLP</span>
             </div>
           </div>
           <div className="flex items-center gap-3">
             <button 
-              onClick={() => setView(view === 'list' ? 'form' : 'list')}
+              onClick={() => {
+                if (view === 'list') {
+                  resetForm();
+                  setView('form');
+                } else {
+                  setView('list');
+                }
+              }}
               className={cn(
-                "px-4 py-2 rounded-xl font-black text-sm transition-all flex items-center gap-2 shadow-sm",
+                "px-4 py-2 rounded-xl font-black text-xs transition-all flex items-center gap-2",
                 view === 'list' 
-                  ? "bg-brass-600 text-white shadow-brass-200" 
-                  : "bg-white text-brass-600 border border-brass-100 hover:bg-brass-50"
+                  ? "bg-white text-navy-600 shadow-lg" 
+                  : "bg-white/10 text-white hover:bg-white/20"
               )}
             >
               {view === 'list' ? (
                 <>
-                  <PlusCircle className="w-4 h-4" />
+                  <PlusCircle className="w-3.5 h-3.5" />
                   New Entry
                 </>
               ) : (
                 <>
-                  <Users className="w-4 h-4" />
-                  All Entry
+                  <Users className="w-3.5 h-3.5" />
+                  View Records
                 </>
               )}
-            </button>
-            <button 
-              onClick={handleLogout}
-              className="p-2 text-stone-400 hover:text-rose-500 hover:bg-rose-50 rounded-xl transition-all"
-            >
-              <LogOut className="w-5 h-5" />
             </button>
           </div>
         </div>
@@ -523,19 +613,19 @@ export default function App() {
               exit={{ opacity: 0, y: -20 }}
               className="space-y-8"
             >
-              <div className="bg-white rounded-[2rem] p-8 shadow-2xl shadow-brass-100 border border-brass-50">
+              <div className="bg-white rounded-[2rem] p-8 shadow-[0_20px_60px_rgba(15,23,42,0.05)] border border-slate-100">
                 <div className="flex items-center justify-between mb-8">
-                  <h2 className="text-2xl font-black tracking-tight flex items-center gap-3 text-brass-900">
-                    <div className="w-2 h-8 bg-brass-500 rounded-full" />
-                    Visitor Entry
+                  <h2 className="text-2xl font-black tracking-tight flex items-center gap-3 text-navy-900">
+                    <div className="w-1.5 h-8 bg-brass-500 rounded-full" />
+                    {editingLeadId ? 'Edit Visitor' : 'Visitor Entry'}
                   </h2>
                   <div className="flex items-center gap-2">
                     {!isOnline && (
-                      <div className="bg-rose-100 text-rose-600 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest flex items-center gap-1">
+                      <div className="bg-rose-50 text-rose-600 px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest flex items-center gap-1 border border-rose-100">
                         <WifiOff className="w-3 h-3" /> Offline
                       </div>
                     )}
-                    <div className="text-[10px] font-black bg-brass-50 text-brass-600 px-3 py-1 rounded-full uppercase tracking-widest">
+                    <div className="text-[9px] font-black bg-slate-50 text-slate-500 px-3 py-1 rounded-full uppercase tracking-widest border border-slate-100">
                       Exhibition 2026
                     </div>
                   </div>
@@ -543,12 +633,11 @@ export default function App() {
 
                 <form onSubmit={handleSubmit} className="space-y-6">
                   <div className="space-y-2">
-                    <label className="text-[10px] font-black text-brass-400 uppercase tracking-[0.15em] ml-1">Staff Member</label>
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">Staff Member</label>
                     <div className="relative group">
-                      <UserCircle className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-brass-300 group-focus-within:text-brass-500 transition-colors pointer-events-none" />
+                      <UserCircle className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-300 group-focus-within:text-navy-600 transition-colors pointer-events-none" />
                       <select 
-                        required
-                        className="w-full bg-brass-50/50 border-2 border-transparent rounded-2xl py-4 pl-12 pr-4 focus:bg-white focus:border-brass-500 transition-all outline-none appearance-none font-bold text-brass-900"
+                        className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-4 pl-12 pr-4 focus:bg-white focus:border-navy-900 transition-all outline-none appearance-none font-bold text-navy-900"
                         value={formData.staffName}
                         onChange={e => setFormData({...formData, staffName: e.target.value})}
                       >
@@ -559,17 +648,16 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                     <div className="space-y-2">
-                      <label className="text-[10px] font-black text-stone-400 uppercase tracking-[0.15em] ml-1">Visitor Name</label>
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">Visitor Name</label>
                       <div className="relative group">
-                        <UserIcon className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-stone-300 group-focus-within:text-brass-500 transition-colors" />
+                        <UserIcon className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-300 group-focus-within:text-navy-600 transition-colors" />
                         <input 
-                          required
                           type="text"
                           placeholder={isProcessingOCR ? "Scanning..." : "Full Name"}
                           className={cn(
-                            "w-full bg-stone-50 border-2 border-transparent rounded-2xl py-4 pl-12 pr-4 focus:bg-white focus:border-brass-500 transition-all outline-none font-medium",
+                            "w-full bg-slate-50 border border-slate-200 rounded-2xl py-4 pl-12 pr-4 focus:bg-white focus:border-navy-900 transition-all outline-none font-bold text-navy-900",
                             isProcessingOCR && "animate-pulse opacity-50"
                           )}
                           value={formData.name}
@@ -579,73 +667,105 @@ export default function App() {
                     </div>
 
                     <div className="space-y-2">
-                      <label className="text-[10px] font-black text-stone-400 uppercase tracking-[0.15em] ml-1">Mobile Number</label>
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">Mobile Number</label>
                       <div className="relative group">
-                        <Phone className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-stone-300 group-focus-within:text-brass-500 transition-colors" />
+                        <Phone className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-300 group-focus-within:text-navy-600 transition-colors" />
                         <input 
                           required
                           type="tel"
-                          placeholder={isProcessingOCR ? "Scanning..." : "+91 00000 00000"}
+                          placeholder={isProcessingOCR ? "Scanning..." : "Mobile Number"}
+                          maxLength={10}
                           className={cn(
-                            "w-full bg-stone-50 border-2 border-transparent rounded-2xl py-4 pl-12 pr-4 focus:bg-white focus:border-brass-500 transition-all outline-none font-medium",
+                            "w-full bg-slate-50 border border-slate-200 rounded-2xl py-4 pl-12 pr-4 focus:bg-white focus:border-navy-900 transition-all outline-none font-bold text-navy-900",
                             isProcessingOCR && "animate-pulse opacity-50"
                           )}
                           value={formData.mobile}
-                          onChange={e => setFormData({...formData, mobile: e.target.value})}
+                          onChange={e => {
+                            const val = e.target.value.replace(/\D/g, '');
+                            if (val.length <= 10) {
+                              setFormData({...formData, mobile: val});
+                            }
+                          }}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">City</label>
+                      <div className="relative group">
+                        <MapPin className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-300 group-focus-within:text-navy-600 transition-colors" />
+                        <input 
+                          type="text"
+                          placeholder={isProcessingOCR ? "Scanning..." : "City"}
+                          className={cn(
+                            "w-full bg-slate-50 border border-slate-200 rounded-2xl py-4 pl-12 pr-4 focus:bg-white focus:border-navy-900 transition-all outline-none font-bold text-navy-900",
+                            isProcessingOCR && "animate-pulse opacity-50"
+                          )}
+                          value={formData.city}
+                          onChange={e => setFormData({...formData, city: e.target.value})}
                         />
                       </div>
                     </div>
                   </div>
 
                   <div className="space-y-2">
-                    <label className="text-[10px] font-black text-stone-400 uppercase tracking-[0.15em] ml-1">Product Interest</label>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      {PRODUCT_CATEGORIES.map(cat => (
-                        <button
-                          key={cat.name}
-                          type="button"
-                          onClick={() => setFormData({...formData, inquiry: cat.name})}
-                          className={cn(
-                            "flex items-center gap-3 p-3 rounded-2xl border-2 transition-all text-left",
-                            formData.inquiry === cat.name 
-                              ? "bg-brass-50 border-brass-500 shadow-md shadow-brass-100" 
-                              : "bg-white border-stone-100 hover:border-brass-200"
-                          )}
-                        >
-                          <img src={cat.image} className="w-10 h-10 rounded-lg object-cover" alt={cat.name} />
-                          <span className={cn(
-                            "text-xs font-bold leading-tight",
-                            formData.inquiry === cat.name ? "text-brass-900" : "text-stone-600"
-                          )}>{cat.name}</span>
-                          {formData.inquiry === cat.name && <CheckCircle2 className="w-4 h-4 text-brass-600 ml-auto" />}
-                        </button>
-                      ))}
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">Product Interest</label>
+                    <div className="relative group">
+                      <FileText className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-300 group-focus-within:text-navy-600 transition-colors pointer-events-none" />
+                      <select 
+                        className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-4 pl-12 pr-4 focus:bg-white focus:border-navy-900 transition-all outline-none appearance-none font-bold text-navy-900"
+                        value={formData.inquiry}
+                        onChange={e => setFormData({...formData, inquiry: e.target.value})}
+                      >
+                        {PRODUCT_CATEGORIES.map(cat => (
+                          <option key={cat} value={cat}>{cat}</option>
+                        ))}
+                      </select>
                     </div>
                   </div>
 
                   {/* Visiting Card Photo Section */}
                   <div className="space-y-3">
-                    <label className="text-[10px] font-black text-stone-400 uppercase tracking-[0.15em] ml-1">Visiting Card Photo</label>
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">Visiting Card Photo</label>
                     
                     {!formData.cardImage ? (
-                      <button
-                        type="button"
-                        onClick={startCamera}
-                        className="w-full aspect-[16/9] bg-stone-50 border-2 border-dashed border-stone-200 rounded-3xl flex flex-col items-center justify-center gap-3 hover:bg-brass-50 hover:border-brass-200 transition-all group"
-                      >
-                        <div className="w-16 h-16 bg-white rounded-2xl flex items-center justify-center shadow-sm group-hover:scale-110 transition-transform">
-                          <Camera className="w-8 h-8 text-stone-400 group-hover:text-brass-500" />
-                        </div>
-                        <span className="text-sm font-bold text-stone-500 group-hover:text-brass-600">Capture Visiting Card</span>
-                      </button>
+                      <div className="grid grid-cols-2 gap-4">
+                        <button
+                          type="button"
+                          onClick={startCamera}
+                          className="aspect-square bg-slate-50 border border-slate-200 rounded-3xl flex flex-col items-center justify-center gap-3 hover:bg-navy-50 hover:border-navy-200 transition-all group"
+                        >
+                          <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center shadow-sm group-hover:scale-110 transition-transform border border-slate-100">
+                            <Camera className="w-6 h-6 text-slate-400 group-hover:text-navy-700" />
+                          </div>
+                          <div className="text-center">
+                            <span className="block text-[10px] font-black text-slate-500 uppercase tracking-widest">Camera</span>
+                          </div>
+                        </button>
+
+                        <label className="aspect-square bg-slate-50 border border-slate-200 rounded-3xl flex flex-col items-center justify-center gap-3 hover:bg-navy-50 hover:border-navy-200 transition-all group cursor-pointer">
+                          <input 
+                            type="file" 
+                            accept="image/*" 
+                            className="hidden" 
+                            onChange={handleFileUpload}
+                          />
+                          <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center shadow-sm group-hover:scale-110 transition-transform border border-slate-100">
+                            <ImageIcon className="w-6 h-6 text-slate-400 group-hover:text-navy-700" />
+                          </div>
+                          <div className="text-center">
+                            <span className="block text-[10px] font-black text-slate-500 uppercase tracking-widest">Gallery</span>
+                          </div>
+                        </label>
+                      </div>
                     ) : (
-                      <div className="relative rounded-3xl overflow-hidden aspect-[16/9] border-2 border-brass-100 shadow-inner group">
+                      <div className="relative rounded-3xl overflow-hidden aspect-[16/9] border border-slate-200 shadow-inner group">
                         <img src={formData.cardImage} alt="Visiting Card" className="w-full h-full object-cover" />
-                        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-4 backdrop-blur-sm">
+                        <div className="absolute inset-0 bg-navy-900/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-4 backdrop-blur-sm">
                           <button 
                             type="button"
                             onClick={startCamera}
-                            className="bg-white text-stone-900 p-3 rounded-full shadow-xl hover:scale-110 transition-transform"
+                            className="bg-white text-navy-900 p-3 rounded-full shadow-xl hover:scale-110 transition-transform"
                           >
                             <RefreshCw className="w-5 h-5" />
                           </button>
@@ -658,9 +778,15 @@ export default function App() {
                           </button>
                         </div>
                         {isProcessingOCR && (
-                          <div className="absolute inset-0 bg-brass-900/40 backdrop-blur-sm flex flex-col items-center justify-center text-white">
+                          <div className="absolute inset-0 bg-navy-950/40 backdrop-blur-sm flex flex-col items-center justify-center text-white">
                             <GearLoader />
-                            <p className="mt-2 text-xs font-black uppercase tracking-widest">Scanning Card...</p>
+                            <p className="mt-2 text-[10px] font-black uppercase tracking-widest">Scanning Card...</p>
+                          </div>
+                        )}
+                        {isCompressing && (
+                          <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm flex flex-col items-center justify-center text-white">
+                            <Loader2 className="w-8 h-8 animate-spin" />
+                            <p className="mt-2 text-[10px] font-black uppercase tracking-widest">Optimizing...</p>
                           </div>
                         )}
                       </div>
@@ -668,10 +794,10 @@ export default function App() {
                   </div>
 
                   <div className="space-y-2">
-                    <label className="text-[10px] font-black text-stone-400 uppercase tracking-[0.15em] ml-1">Additional Notes</label>
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">Additional Notes</label>
                     <textarea 
                       placeholder="Specific requirements, quantity, timeline..."
-                      className="w-full bg-stone-50 border-2 border-transparent rounded-2xl py-4 px-6 focus:bg-white focus:border-brass-500 transition-all outline-none min-h-[120px] font-medium resize-none"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-4 px-6 focus:bg-white focus:border-navy-900 transition-all outline-none min-h-[100px] font-bold text-navy-900 resize-none"
                       value={formData.notes}
                       onChange={e => setFormData({...formData, notes: e.target.value})}
                     />
@@ -680,22 +806,25 @@ export default function App() {
                   <button
                     disabled={submitting}
                     type="submit"
-                    className="w-full bg-gradient-to-r from-brass-500 to-brass-700 hover:from-brass-600 hover:to-brass-800 text-white font-black py-5 rounded-2xl transition-all flex items-center justify-center gap-4 disabled:opacity-50 shadow-xl shadow-brass-100 mt-4 relative overflow-hidden group"
+                    className="w-full bg-navy-600 hover:bg-navy-700 text-white font-black py-5 rounded-2xl transition-all flex items-center justify-center gap-4 disabled:opacity-50 shadow-xl shadow-navy-100 mt-4 relative overflow-hidden group"
                   >
                     <motion.div
-                      className="absolute inset-0 bg-gradient-to-r from-transparent via-white/30 to-transparent -skew-x-12"
+                      className="absolute inset-0 bg-white/10 -skew-x-12"
                       animate={{ x: ['-100%', '200%'] }}
-                      transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
+                      transition={{ duration: 3, repeat: Infinity, ease: "linear" }}
                     />
                     {submitting ? <Loader2 className="w-6 h-6 animate-spin" /> : <Send className="w-6 h-6" />}
-                    <span className="relative z-10">Save Visitor Record</span>
+                    <span className="relative z-10 tracking-tight text-lg uppercase tracking-widest">{editingLeadId ? 'Update Visitor Record' : 'Save Visitor Record'}</span>
                   </button>
 
                   <div className="pt-4 flex items-center justify-center">
                     <button
                       type="button"
-                      onClick={() => setView('list')}
-                      className="text-[10px] font-black text-brass-400 uppercase tracking-[0.2em] hover:text-brass-600 transition-colors flex items-center gap-2"
+                      onClick={() => {
+                        resetForm();
+                        setView('list');
+                      }}
+                      className="text-[10px] font-black text-navy-400 uppercase tracking-[0.2em] hover:text-navy-700 transition-colors flex items-center gap-2"
                     >
                       <Users className="w-3 h-3" />
                       View All Entries
@@ -719,36 +848,40 @@ export default function App() {
                   initial={{ rotate: -10, scale: 0 }}
                   animate={{ rotate: 0, scale: 1 }}
                   transition={{ type: 'spring', damping: 12 }}
-                  className="w-24 h-24 bg-gradient-to-tr from-emerald-400 to-teal-500 rounded-[2rem] flex items-center justify-center mb-8 shadow-2xl shadow-emerald-200"
+                  className="w-24 h-24 bg-gradient-to-tr from-emerald-400 to-teal-400 rounded-[2rem] flex items-center justify-center mb-8 shadow-2xl shadow-emerald-200"
                 >
                   <CheckCircle2 className="w-14 h-14 text-white" />
                 </motion.div>
-                <h2 className="text-4xl font-black text-stone-900 tracking-tight">Success!</h2>
-                <p className="text-stone-500 mt-3 font-medium text-lg">Lead captured and synced to cloud.</p>
+                <h2 className="text-4xl font-black text-navy-900 tracking-tight">{editingLeadId ? 'Updated!' : 'Success!'}</h2>
+                <p className="text-slate-500 mt-3 font-bold text-sm uppercase tracking-widest">{editingLeadId ? 'Lead updated successfully.' : 'Lead captured and synced to cloud.'}</p>
               </div>
 
-              <div className="bg-white rounded-[2.5rem] p-10 shadow-2xl shadow-brass-200/50 border border-brass-100 max-w-md mx-auto relative overflow-hidden">
-                <div className="absolute top-0 right-0 w-32 h-32 bg-brass-50 rounded-full -mr-16 -mt-16 opacity-50" />
+              <div className="bg-white rounded-[2.5rem] p-10 shadow-[0_20px_60px_rgba(15,23,42,0.05)] border border-slate-100 max-w-md mx-auto relative overflow-hidden">
+                <div className="absolute top-0 right-0 w-32 h-32 bg-slate-50 rounded-full -mr-16 -mt-16 opacity-50" />
                 
                 <div className="space-y-6 text-left relative z-10">
                   <div className="space-y-1">
-                    <span className="text-[10px] font-black text-brass-400 uppercase tracking-widest">Visitor</span>
-                    <p className="text-xl font-black text-brass-900">{lastSavedLead?.name}</p>
+                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Visitor</span>
+                    <p className="text-xl font-black text-navy-900">{lastSavedLead?.name}</p>
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-1">
-                      <span className="text-[10px] font-black text-brass-400 uppercase tracking-widest">Mobile</span>
-                      <p className="font-bold text-brass-600">{lastSavedLead?.mobile}</p>
+                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Mobile</span>
+                      <p className="font-bold text-navy-700">{lastSavedLead?.mobile}</p>
                     </div>
                     <div className="space-y-1">
-                      <span className="text-[10px] font-black text-brass-400 uppercase tracking-widest">Inquiry</span>
-                      <p className="font-bold text-brass-700 leading-tight">{lastSavedLead?.inquiry}</p>
+                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">City</span>
+                      <p className="font-bold text-navy-700">{lastSavedLead?.city}</p>
                     </div>
+                  </div>
+                  <div className="space-y-1">
+                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Inquiry</span>
+                    <p className="font-bold text-navy-800 leading-tight">{lastSavedLead?.inquiry}</p>
                   </div>
                   {lastSavedLead?.cardImage && (
                     <div className="pt-2">
-                      <span className="text-[10px] font-black text-brass-400 uppercase tracking-widest block mb-2">Visiting Card</span>
-                      <img src={lastSavedLead.cardImage} className="w-full h-32 object-cover rounded-2xl border border-brass-100" alt="Card" />
+                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2">Visiting Card</span>
+                      <img src={lastSavedLead.cardImage} className="w-full h-32 object-cover rounded-2xl border border-slate-100" alt="Card" />
                     </div>
                   )}
                 </div>
@@ -764,7 +897,10 @@ export default function App() {
                 </button>
                 
                 <button
-                  onClick={() => setView('form')}
+                  onClick={() => {
+                    resetForm();
+                    setView('form');
+                  }}
                   className="w-full bg-white hover:bg-stone-50 text-stone-600 font-black py-5 rounded-3xl transition-all border-2 border-stone-100"
                 >
                   Next Visitor
@@ -782,83 +918,107 @@ export default function App() {
               className="space-y-6"
             >
               <div className="flex items-center justify-between">
-                <h2 className="text-2xl font-black tracking-tight flex items-center gap-3 text-brass-900">
+                <h2 className="text-2xl font-black tracking-tight flex items-center gap-3 text-navy-900">
                   <div className="w-2 h-8 bg-brass-500 rounded-full" />
                   All Entries
                 </h2>
                 <div className="flex items-center gap-3">
                   <button
                     onClick={exportToCSV}
-                    className="bg-white text-brass-700 border border-brass-200 px-4 py-2 rounded-xl text-xs font-black flex items-center gap-2 hover:bg-brass-50 transition-all shadow-sm"
+                    className="bg-white text-navy-600 border border-navy-200 px-4 py-2 rounded-xl text-xs font-black flex items-center gap-2 hover:bg-navy-50 transition-all shadow-lg shadow-navy-50"
                   >
                     <Download className="w-4 h-4" />
                     Export CSV
                   </button>
-                  <div className="bg-brass-600 px-4 py-2 rounded-2xl shadow-lg shadow-brass-100 text-xs font-black text-white">
+                  <div className="bg-navy-600 px-4 py-2 rounded-2xl shadow-lg shadow-navy-100 text-xs font-black text-white">
                     {recentLeads.length} Total Records
                   </div>
                 </div>
               </div>
 
               {recentLeads.length === 0 ? (
-                <div className="text-center py-32 bg-white rounded-[2.5rem] border-2 border-dashed border-brass-100">
-                  <div className="w-20 h-20 bg-brass-50 rounded-full flex items-center justify-center mx-auto mb-4">
-                    <Users className="w-10 h-10 text-brass-200" />
+                <div className="text-center py-32 bg-white rounded-[2.5rem] border-2 border-dashed border-navy-100">
+                  <div className="w-20 h-20 bg-navy-50 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <Users className="w-10 h-10 text-navy-200" />
                   </div>
-                  <p className="text-brass-400 font-bold">No visitors recorded yet.</p>
+                  <p className="text-navy-400 font-bold">No visitors recorded yet.</p>
                 </div>
               ) : (
-                <div className="bg-white rounded-[2rem] shadow-2xl shadow-brass-100 border border-brass-50 overflow-hidden">
+                <div className="bg-white rounded-[2rem] shadow-[0_20px_60px_rgba(15,23,42,0.05)] border border-slate-100 overflow-hidden">
                   <div className="overflow-x-auto">
                     <table className="w-full text-left border-collapse">
                       <thead>
-                        <tr className="bg-brass-50/50 border-b border-brass-100">
-                          <th className="px-6 py-4 text-[10px] font-black text-brass-400 uppercase tracking-widest">Date & Time</th>
-                          <th className="px-6 py-4 text-[10px] font-black text-brass-400 uppercase tracking-widest">Staff</th>
-                          <th className="px-6 py-4 text-[10px] font-black text-brass-400 uppercase tracking-widest">Visitor</th>
-                          <th className="px-6 py-4 text-[10px] font-black text-brass-400 uppercase tracking-widest">Mobile</th>
-                          <th className="px-6 py-4 text-[10px] font-black text-brass-400 uppercase tracking-widest">Inquiry</th>
-                          <th className="px-6 py-4 text-[10px] font-black text-brass-400 uppercase tracking-widest">Card</th>
+                        <tr className="bg-navy-50/50 border-b border-navy-100">
+                          <th className="px-6 py-4 text-[10px] font-black text-navy-400 uppercase tracking-widest">Date & Time</th>
+                          <th className="px-6 py-4 text-[10px] font-black text-navy-400 uppercase tracking-widest">Staff</th>
+                          <th className="px-6 py-4 text-[10px] font-black text-navy-400 uppercase tracking-widest">Visitor</th>
+                          <th className="px-6 py-4 text-[10px] font-black text-navy-400 uppercase tracking-widest">Mobile</th>
+                          <th className="px-6 py-4 text-[10px] font-black text-navy-400 uppercase tracking-widest">City</th>
+                          <th className="px-6 py-4 text-[10px] font-black text-navy-400 uppercase tracking-widest">Inquiry</th>
+                          <th className="px-6 py-4 text-[10px] font-black text-navy-400 uppercase tracking-widest">Card</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-brass-50">
+                      <tbody className="divide-y divide-slate-50">
                         {recentLeads.map((lead) => (
-                          <tr key={lead.id} className="hover:bg-brass-50/30 transition-colors group">
+                          <tr 
+                            key={lead.id} 
+                            onClick={() => handleEditLead(lead)}
+                            className="hover:bg-slate-50/50 transition-colors group cursor-pointer"
+                          >
                             <td className="px-6 py-4">
-                              <div className="text-xs font-bold text-stone-900">
+                              <div className="text-xs font-bold text-slate-900">
                                 {lead.createdAt?.toDate ? lead.createdAt.toDate().toLocaleDateString() : (typeof lead.createdAt === 'string' ? new Date(lead.createdAt).toLocaleDateString() : 'Just now')}
                               </div>
-                              <div className="text-[10px] font-medium text-stone-400">
+                              <div className="text-[10px] font-medium text-slate-400">
                                 {lead.createdAt?.toDate ? lead.createdAt.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : (typeof lead.createdAt === 'string' ? new Date(lead.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '')}
                               </div>
                             </td>
                             <td className="px-6 py-4">
-                              <span className="text-xs font-black text-brass-600 bg-brass-50 px-2 py-1 rounded-lg">
+                              <span className="text-[10px] font-black text-navy-600 bg-navy-50 px-2.5 py-1 rounded-lg border border-navy-100">
                                 {lead.staffName}
                               </span>
                             </td>
                             <td className="px-6 py-4">
-                              <div className="text-sm font-black text-stone-900">{lead.name}</div>
+                              <div className="text-sm font-black text-navy-900">{lead.name}</div>
                             </td>
                             <td className="px-6 py-4">
-                              <div className="text-xs font-bold text-stone-600 flex items-center gap-1">
-                                <Phone className="w-3 h-3 text-brass-400" />
+                              <div className="text-xs font-bold text-slate-600 flex items-center gap-1.5">
+                                <Phone className="w-3 h-3 text-slate-300" />
                                 {lead.mobile}
                               </div>
                             </td>
                             <td className="px-6 py-4">
-                              <div className="text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded-lg inline-block">
+                              <div className="text-xs font-bold text-slate-600 flex items-center gap-1.5">
+                                <MapPin className="w-3 h-3 text-slate-300" />
+                                {lead.city}
+                              </div>
+                            </td>
+                            <td className="px-6 py-4">
+                              <div className="text-[10px] font-black text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg inline-block border border-emerald-100 uppercase tracking-tight">
                                 {lead.inquiry}
                               </div>
                             </td>
                             <td className="px-6 py-4">
                               {lead.cardImage ? (
-                                <div className="w-10 h-10 rounded-lg overflow-hidden border border-brass-100 shadow-sm">
+                                <div 
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setPreviewLead(lead);
+                                  }}
+                                  className="w-10 h-10 rounded-lg overflow-hidden border border-slate-100 shadow-sm cursor-zoom-in hover:scale-110 transition-transform"
+                                >
                                   <img src={lead.cardImage} className="w-full h-full object-cover" alt="Card" />
                                 </div>
                               ) : (
-                                <div className="w-10 h-10 rounded-lg bg-stone-50 flex items-center justify-center border border-stone-100">
-                                  <ImageIcon className="w-4 h-4 text-stone-300" />
+                                <div 
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleEditLead(lead);
+                                    setTimeout(() => startCamera(), 100);
+                                  }}
+                                  className="w-10 h-10 rounded-lg bg-slate-50 flex items-center justify-center border border-slate-100 cursor-pointer hover:bg-slate-100 transition-colors"
+                                >
+                                  <ImageIcon className="w-4 h-4 text-slate-200" />
                                 </div>
                               )}
                             </td>
@@ -876,6 +1036,12 @@ export default function App() {
 
       {/* Camera Modal Overlay */}
       <AnimatePresence>
+        {previewLead && (
+          <ImagePreviewModal 
+            lead={previewLead} 
+            onClose={() => setPreviewLead(null)} 
+          />
+        )}
         {showCamera && (
           <motion.div 
             initial={{ opacity: 0, x: '100%' }}
@@ -885,28 +1051,28 @@ export default function App() {
             className="fixed inset-0 z-50 bg-brass-900/95 backdrop-blur-xl flex flex-col p-6"
           >
             <div className="flex justify-between items-center mb-6">
-              <h3 className="text-white font-black text-xl">Capture Card</h3>
-              <button onClick={stopCamera} className="bg-white/10 text-white p-3 rounded-full hover:bg-white/20 transition-all">
+              <h3 className="text-white font-black text-xl tracking-tight">Capture Visiting Card</h3>
+              <button onClick={stopCamera} className="bg-white/10 text-white p-3 rounded-full hover:bg-white/20 transition-all border border-white/10">
                 <X className="w-6 h-6" />
               </button>
             </div>
             
-            <div className="flex-1 relative rounded-[2.5rem] overflow-hidden bg-stone-900 shadow-2xl border border-white/10">
+            <div className="flex-1 relative rounded-[2.5rem] overflow-hidden bg-navy-950 shadow-2xl border border-white/10">
               <video 
                 ref={videoRef} 
                 autoPlay 
                 playsInline 
                 className="w-full h-full object-cover"
               />
-              <div className="absolute inset-0 border-[3px] border-white/20 rounded-[2.5rem] pointer-events-none m-8" />
+              <div className="absolute inset-0 border-[2px] border-white/20 rounded-[2.5rem] pointer-events-none m-8" />
               
               <div className="absolute bottom-10 left-0 right-0 flex justify-center">
                 <button 
                   onClick={capturePhoto}
-                  className="w-20 h-20 bg-white rounded-full p-1 shadow-2xl active:scale-90 transition-transform"
+                  className="w-20 h-20 bg-white rounded-full p-1 shadow-2xl active:scale-95 transition-transform"
                 >
-                  <div className="w-full h-full border-4 border-stone-900 rounded-full flex items-center justify-center">
-                    <div className="w-12 h-12 bg-brass-600 rounded-full" />
+                  <div className="w-full h-full border-4 border-navy-900 rounded-full flex items-center justify-center">
+                    <div className="w-12 h-12 bg-navy-800 rounded-full" />
                   </div>
                 </button>
               </div>
@@ -923,18 +1089,18 @@ export default function App() {
         <motion.div 
           initial={{ y: 100 }}
           animate={{ y: 0 }}
-          className="bg-white/90 backdrop-blur-2xl border border-brass-200 shadow-2xl rounded-3xl p-4 flex justify-between items-center"
+          className="bg-white border border-navy-50 shadow-[0_20px_50px_rgba(59,130,246,0.15)] rounded-3xl p-4 flex justify-between items-center"
         >
           <div className="flex items-center gap-3">
             <div className={cn(
-              "w-3 h-3 rounded-full animate-pulse shadow-lg",
-              isOnline ? "bg-emerald-500 shadow-emerald-200" : "bg-rose-500 shadow-rose-200"
+              "w-2.5 h-2.5 rounded-full animate-pulse",
+              isOnline ? "bg-emerald-400" : "bg-rose-400"
             )} />
             <div className="flex flex-col">
-              <span className="text-[10px] font-black uppercase tracking-widest text-brass-800">
+              <span className="text-[10px] font-black uppercase tracking-widest text-navy-900">
                 {isOnline ? "Live Session" : "Offline Mode"}
               </span>
-              <span className="text-[8px] font-bold text-brass-400 uppercase tracking-tight">
+              <span className="text-[8px] font-black text-navy-400 uppercase tracking-tight">
                 {formData.staffName}
               </span>
             </div>
@@ -945,7 +1111,7 @@ export default function App() {
                 onClick={() => isOnline && syncOfflineLeads()}
                 disabled={isSyncing}
                 className={cn(
-                  "bg-rose-50 text-rose-600 px-2 py-1 rounded-lg text-[8px] font-black uppercase flex items-center gap-1",
+                  "bg-rose-50 text-rose-500 px-2 py-1 rounded-lg text-[8px] font-black uppercase flex items-center gap-1 border border-rose-100",
                   isOnline ? "animate-bounce cursor-pointer" : "opacity-50 cursor-not-allowed",
                   isSyncing && "animate-pulse"
                 )}
@@ -954,7 +1120,7 @@ export default function App() {
                 {isSyncing ? "Syncing..." : `${pendingLeads.length} Sync`}
               </button>
             )}
-            <span className="text-[10px] font-black text-brass-700 bg-brass-50 px-3 py-1 rounded-full uppercase tracking-widest">
+            <span className="text-[10px] font-black text-navy-600 bg-navy-50 px-3 py-1 rounded-full uppercase tracking-widest border border-navy-100">
               {recentLeads.length + pendingLeads.length} Leads
             </span>
           </div>
