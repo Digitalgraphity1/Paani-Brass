@@ -29,7 +29,9 @@ import {
   Settings,
   ChevronRight,
   MapPin,
-  Trash2
+  Trash2,
+  LogOut,
+  Lock
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -66,6 +68,17 @@ const STAFF_NAMES = [
   "Staff 5"
 ];
 
+const VALID_USERS: Record<string, string> = {
+  "7600797600": "7600",
+  "9408324979": "4979",
+  "9898968899": "8899",
+  "9763587408": "7408",
+  "9313059478": "9478",
+  "9904082019": "2019",
+  "9023030868": "0868",
+  "9033887788": "7788"
+};
+
 const getISTDateTime = () => {
   return new Date().toLocaleString('en-US', {
     timeZone: 'Asia/Kolkata',
@@ -93,6 +106,11 @@ interface Lead {
 }
 
 export default function App() {
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [loginId, setLoginId] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginError, setLoginError] = useState('');
+
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [lastSavedLead, setLastSavedLead] = useState<Lead | null>(null);
@@ -133,6 +151,12 @@ export default function App() {
     // Load pending leads
     const saved = localStorage.getItem('paani_pending_leads');
     if (saved) setPendingLeads(JSON.parse(saved));
+
+    // Check login status
+    const loggedIn = localStorage.getItem('paani_logged_in');
+    if (loggedIn === 'true') {
+      setIsLoggedIn(true);
+    }
 
     return () => {
       window.removeEventListener('online', handleOnline);
@@ -613,6 +637,24 @@ export default function App() {
     document.body.removeChild(link);
   };
 
+  const handleLogin = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (VALID_USERS[loginId] && VALID_USERS[loginId] === loginPassword) {
+      setIsLoggedIn(true);
+      localStorage.setItem('paani_logged_in', 'true');
+      setLoginError('');
+    } else {
+      setLoginError('Invalid Mobile Number or Password');
+    }
+  };
+
+  const handleLogout = () => {
+    setIsLoggedIn(false);
+    localStorage.removeItem('paani_logged_in');
+    setLoginId('');
+    setLoginPassword('');
+  };
+
   const GearLoader = () => (
     <div className="relative w-24 h-24">
       <motion.div
@@ -708,6 +750,95 @@ export default function App() {
     );
   }
 
+  if (!isLoggedIn) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4 selection:bg-navy-100 selection:text-navy-900">
+        <motion.div 
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="w-full max-w-md bg-white rounded-[2.5rem] shadow-[0_20px_60px_rgba(15,23,42,0.05)] border border-slate-100 overflow-hidden relative"
+        >
+          <div className="absolute top-0 right-0 w-40 h-40 bg-navy-50 rounded-full -mr-20 -mt-20 opacity-50" />
+          <div className="absolute bottom-0 left-0 w-32 h-32 bg-brass-50 rounded-full -ml-16 -mb-16 opacity-50" />
+          
+          <div className="p-10 relative z-10">
+            <div className="flex justify-center mb-8">
+              <div className="w-20 h-20 bg-white rounded-2xl flex items-center justify-center shadow-xl border border-slate-50 overflow-hidden">
+                <img 
+                  src="https://www.paaniprecisions.com/images/logo.png" 
+                  alt="Paani Logo" 
+                  className="w-full h-full object-contain p-2"
+                  referrerPolicy="no-referrer"
+                />
+              </div>
+            </div>
+            
+            <div className="text-center mb-10">
+              <h1 className="text-3xl font-black text-navy-900 tracking-tight mb-2">Welcome Back</h1>
+              <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Sign in to continue</p>
+            </div>
+
+            <form onSubmit={handleLogin} className="space-y-6">
+              <div className="space-y-2">
+                <label className="text-[10px] font-black text-navy-400 uppercase tracking-widest ml-1">Mobile Number</label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                    <UserIcon className="h-5 w-5 text-slate-300" />
+                  </div>
+                  <input
+                    type="text"
+                    value={loginId}
+                    onChange={(e) => setLoginId(e.target.value.replace(/\D/g, ''))}
+                    className="w-full pl-11 pr-4 py-4 bg-slate-50 border-2 border-slate-100 rounded-2xl text-sm font-bold text-navy-900 focus:outline-none focus:border-navy-500 focus:ring-4 focus:ring-navy-500/10 transition-all placeholder:text-slate-300 placeholder:font-medium"
+                    placeholder="Enter your mobile number"
+                    maxLength={10}
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-[10px] font-black text-navy-400 uppercase tracking-widest ml-1">Password</label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                    <Lock className="h-5 w-5 text-slate-300" />
+                  </div>
+                  <input
+                    type="password"
+                    value={loginPassword}
+                    onChange={(e) => setLoginPassword(e.target.value)}
+                    className="w-full pl-11 pr-4 py-4 bg-slate-50 border-2 border-slate-100 rounded-2xl text-sm font-bold text-navy-900 focus:outline-none focus:border-navy-500 focus:ring-4 focus:ring-navy-500/10 transition-all placeholder:text-slate-300 placeholder:font-medium"
+                    placeholder="Enter your password"
+                    required
+                  />
+                </div>
+              </div>
+
+              {loginError && (
+                <motion.div 
+                  initial={{ opacity: 0, y: -10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="bg-red-50 text-red-500 text-xs font-bold p-3 rounded-xl flex items-center gap-2 border border-red-100"
+                >
+                  <AlertCircle className="w-4 h-4" />
+                  {loginError}
+                </motion.div>
+              )}
+
+              <button
+                type="submit"
+                className="w-full bg-navy-600 hover:bg-navy-700 text-white font-black py-4 rounded-2xl transition-all shadow-xl shadow-navy-200 flex items-center justify-center gap-2 group"
+              >
+                <span>Sign In</span>
+                <ChevronRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
+              </button>
+            </form>
+          </div>
+        </motion.div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans selection:bg-navy-100 selection:text-navy-900">
       {/* Header */}
@@ -755,6 +886,13 @@ export default function App() {
                   View Records
                 </>
               )}
+            </button>
+            <button
+              onClick={handleLogout}
+              className="w-10 h-10 rounded-xl bg-white/10 text-white hover:bg-red-500 hover:text-white transition-colors flex items-center justify-center"
+              title="Logout"
+            >
+              <LogOut className="w-4 h-4" />
             </button>
           </div>
         </div>
