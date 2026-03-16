@@ -4,19 +4,9 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
-import { 
-  collection, 
-  addDoc, 
-  serverTimestamp, 
-  query, 
-  orderBy, 
-  limit, 
-  onSnapshot,
-  updateDoc,
-  doc
-} from 'firebase/firestore';
-import { db, auth } from './firebase';
 import { GoogleGenAI } from "@google/genai";
+
+const WEBHOOK_URL = import.meta.env.VITE_GOOGLE_SHEETS_WEBHOOK_URL;
 import { 
   UserCircle, 
   PlusCircle, 
@@ -75,8 +65,22 @@ const STAFF_NAMES = [
   "Staff 5"
 ];
 
+const getISTDateTime = () => {
+  return new Date().toLocaleString('en-US', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true
+  });
+};
+
 interface Lead {
   id?: string;
+  rowIndex?: number;
   name: string;
   mobile: string;
   city: string;
@@ -98,6 +102,7 @@ export default function App() {
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [isProcessingOCR, setIsProcessingOCR] = useState(false);
   const [isCompressing, setIsCompressing] = useState(false);
+  const ocrRequestIdRef = useRef<number>(0);
   const [pendingLeads, setPendingLeads] = useState<Lead[]>([]);
   const [isSyncing, setIsSyncing] = useState(false);
   const [editingLeadId, setEditingLeadId] = useState<string | null>(null);
@@ -140,15 +145,18 @@ export default function App() {
   }, [isOnline, pendingLeads]);
 
   const syncOfflineLeads = async () => {
-    if (isSyncing) return;
+    if (isSyncing || !WEBHOOK_URL) return;
     setIsSyncing(true);
     const toSync = [...pendingLeads];
     for (const lead of toSync) {
       try {
-        const { id, ...data } = lead;
-        await addDoc(collection(db, 'leads'), {
-          ...data,
-          createdAt: serverTimestamp()
+        await fetch(WEBHOOK_URL, {
+          method: 'POST',
+          mode: 'no-cors',
+          headers: {
+            'Content-Type': 'text/plain',
+          },
+          body: JSON.stringify({ action: 'add', ...lead })
         });
       } catch (err) {
         console.error("Sync error:", err);
@@ -157,32 +165,114 @@ export default function App() {
     setPendingLeads([]);
     localStorage.removeItem('paani_pending_leads');
     setIsSyncing(false);
+    fetchLeads();
   };
 
   useEffect(() => {
     setLoading(false);
   }, []);
 
-  useEffect(() => {
-    const q = query(collection(db, 'leads'), orderBy('createdAt', 'desc'), limit(10));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const leads = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Lead[];
-      setRecentLeads(leads);
-    }, (err) => {
-      console.error("Firestore error:", err);
-      if (err.message.includes('permission-denied')) {
-        setError("Access denied. Please ensure firestore rules allow public access.");
-      }
-    });
+  const fetchLeads = async () => {
+    if (!WEBHOOK_URL) return;
+    try {
+      const res = await fetch(WEBHOOK_URL);
+      const data = await res.json();
+      
+      if (Array.isArray(data)) {
+        let normalizedData: Lead[] = [];
+        
+        // Handle array of arrays (e.g., raw sheet data where first row is headers)
+        if (data.length > 0 && Array.isArray(data[0])) {
+          const headers = data[0].map((h: string) => h?.toString().toLowerCase().replace(/[^a-z0-9]/g, ''));
+          
+          normalizedData = data.slice(1).map((row: any[], index: number) => {
+            const getVal = (possibleKeys: string[]) => {
+              const index = headers.findIndex((h: string) => possibleKeys.includes(h));
+              return index !== -1 ? row[index] : '';
+            };
+            
+            return {
+              id: getVal(['id', 'uuid', 'recordid']) || `row-${index + 2}`,
+              rowIndex: index + 2,
+              name: getVal(['name', 'visitorname', 'visitor', 'fullname']),
+              mobile: getVal(['mobile', 'mobilenumber', 'phone', 'phonenumber', 'contact']),
+              city: getVal(['city', 'location', 'address']),
+              inquiry: getVal(['inquiry', 'productinterest', 'product', 'category']),
+              notes: getVal(['notes', 'additionalnotes', 'remarks']),
+              cardImage: getVal(['cardimage', 'image', 'card', 'photo']),
+              staffName: getVal(['staffname', 'staffmember', 'staff', 'employee']),
+              createdAt: getVal(['createdat', 'date', 'timestamp', 'time']) || getISTDateTime()
+            };
+          });
+        } 
+        // Handle array of objects
+        else if (data.length > 0 && typeof data[0] === 'object') {
+          normalizedData = data.map((row: any, index: number) => {
+            // If the object already perfectly matches our Lead interface
+            if (row.name !== undefined && row.mobile !== undefined && row.staffName !== undefined) {
+              return {
+                ...row,
+                id: row.id || `row-${index + 2}`,
+                rowIndex: row.rowIndex || index + 2
+              } as Lead;
+            }
+            
+            const getValue = (possibleKeys: string[]) => {
+              const key = Object.keys(row).find(k => 
+                possibleKeys.some(pk => k.toLowerCase().replace(/[^a-z0-9]/g, '') === pk)
+              );
+              return key ? row[key] : '';
+            };
 
-    return () => unsubscribe();
+            return {
+              id: getValue(['id', 'uuid', 'recordid']) || `row-${index + 2}`,
+              rowIndex: index + 2,
+              name: getValue(['name', 'visitorname', 'visitor', 'fullname']),
+              mobile: getValue(['mobile', 'mobilenumber', 'phone', 'phonenumber', 'contact']),
+              city: getValue(['city', 'location', 'address']),
+              inquiry: getValue(['inquiry', 'productinterest', 'product', 'category']),
+              notes: getValue(['notes', 'additionalnotes', 'remarks']),
+              cardImage: getValue(['cardimage', 'image', 'card', 'photo']),
+              staffName: getValue(['staffname', 'staffmember', 'staff', 'employee']),
+              createdAt: getValue(['createdat', 'date', 'timestamp', 'time']) || getISTDateTime()
+            };
+          });
+        }
+        
+        // Filter out completely empty rows that might come from empty spreadsheet rows
+        const validLeads = normalizedData.filter(lead => lead.name || lead.mobile || lead.staffName);
+        
+        // Sort by date descending (newest first)
+        validLeads.sort((a, b) => {
+          const dateA = new Date(a.createdAt).getTime();
+          const dateB = new Date(b.createdAt).getTime();
+          return (isNaN(dateB) ? 0 : dateB) - (isNaN(dateA) ? 0 : dateA);
+        });
+        
+        setRecentLeads(validLeads);
+      }
+    } catch (err) {
+      console.error("Fetch error:", err);
+    }
+  };
+
+  useEffect(() => {
+    fetchLeads();
+    // Poll every 30 seconds for updates
+    const interval = setInterval(fetchLeads, 30000);
+    return () => clearInterval(interval);
   }, []);
 
   const resetForm = () => {
+    ocrRequestIdRef.current++; // Cancel any pending OCR
+    setIsProcessingOCR(false);
     setEditingLeadId(null);
+    
+    // Ensure staffName is valid
+    const validStaffName = STAFF_NAMES.includes(formData.staffName) 
+      ? formData.staffName 
+      : STAFF_NAMES[0];
+      
     setFormData({
       name: '',
       mobile: '',
@@ -190,12 +280,18 @@ export default function App() {
       inquiry: PRODUCT_CATEGORIES[0],
       notes: '',
       cardImage: '',
-      staffName: formData.staffName
+      staffName: validStaffName
     });
   };
 
   const handleEditLead = (lead: Lead) => {
     setEditingLeadId(lead.id || null);
+    
+    // Ensure staffName is valid, otherwise fallback to first staff member
+    const validStaffName = STAFF_NAMES.includes(lead.staffName) 
+      ? lead.staffName 
+      : STAFF_NAMES[0];
+      
     setFormData({
       name: lead.name,
       mobile: lead.mobile,
@@ -203,7 +299,7 @@ export default function App() {
       inquiry: lead.inquiry,
       notes: lead.notes || '',
       cardImage: lead.cardImage || '',
-      staffName: lead.staffName
+      staffName: validStaffName
     });
     setView('form');
   };
@@ -310,7 +406,10 @@ export default function App() {
       console.warn("Gemini API Key missing. OCR skipped.");
       return;
     }
+    
+    const requestId = ++ocrRequestIdRef.current;
     setIsProcessingOCR(true);
+    
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
       const response = await ai.models.generateContent({
@@ -323,6 +422,8 @@ export default function App() {
         }
       });
       
+      if (requestId !== ocrRequestIdRef.current) return; // Cancelled
+      
       const text = response.text;
       if (text) {
         const cleanJson = text.replace(/```json|```/g, '').trim();
@@ -330,19 +431,28 @@ export default function App() {
           const data = JSON.parse(cleanJson);
           setFormData(prev => ({
             ...prev,
-            name: data.name || prev.name,
-            mobile: data.mobile || prev.mobile,
-            city: data.city || prev.city
+            name: prev.name || data.name || '',
+            mobile: prev.mobile || data.mobile || '',
+            city: prev.city || data.city || ''
           }));
         } catch (e) {
           console.error("JSON Parse Error:", e, text);
         }
       }
     } catch (err) {
-      console.error("OCR Error:", err);
+      if (requestId === ocrRequestIdRef.current) {
+        console.error("OCR Error:", err);
+      }
     } finally {
-      setIsProcessingOCR(false);
+      if (requestId === ocrRequestIdRef.current) {
+        setIsProcessingOCR(false);
+      }
     }
+  };
+
+  const cancelOCR = () => {
+    ocrRequestIdRef.current++;
+    setIsProcessingOCR(false);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -359,32 +469,44 @@ export default function App() {
     setError(null);
 
     try {
-      const leadData = {
+      const leadData: Lead = {
+        id: editingLeadId || crypto.randomUUID(),
         ...formData,
-        createdAt: editingLeadId ? (recentLeads.find(l => l.id === editingLeadId)?.createdAt || serverTimestamp()) : (isOnline ? serverTimestamp() : new Date().toISOString())
+        createdAt: editingLeadId ? (recentLeads.find(l => l.id === editingLeadId)?.createdAt || getISTDateTime()) : getISTDateTime()
       };
 
       if (isOnline) {
-        if (editingLeadId) {
-          await updateDoc(doc(db, 'leads', editingLeadId), leadData);
-          setLastSavedLead({ id: editingLeadId, ...leadData });
-        } else {
-          const docRef = await addDoc(collection(db, 'leads'), leadData);
-          setLastSavedLead({ id: docRef.id, ...leadData });
+        if (!WEBHOOK_URL) {
+          setError("Google Sheets Webhook URL is not configured. Please add it in settings.");
+          setSubmitting(false);
+          return;
         }
+        
+        await fetch(WEBHOOK_URL, {
+          method: 'POST',
+          mode: 'no-cors',
+          headers: {
+            'Content-Type': 'text/plain',
+          },
+          body: JSON.stringify({ 
+            action: editingLeadId ? 'update' : 'add', 
+            originalMobile: editingLeadId ? recentLeads.find(l => l.id === editingLeadId)?.mobile : undefined,
+            ...leadData 
+          })
+        });
+        
+        setLastSavedLead(leadData);
+        fetchLeads(); // Refresh list
       } else {
         if (editingLeadId) {
-          // For offline editing, we'd need more complex logic, but for now let's just treat as new if offline
-          // or ideally we don't allow offline edit of synced leads easily without more state
           setError("Editing is only available while online.");
           setSubmitting(false);
           return;
         }
-        const offlineLead = { ...leadData, id: 'offline-' + Date.now() };
-        const newPending = [...pendingLeads, offlineLead];
+        const newPending = [...pendingLeads, leadData];
         setPendingLeads(newPending);
         localStorage.setItem('paani_pending_leads', JSON.stringify(newPending));
-        setLastSavedLead(offlineLead);
+        setLastSavedLead(leadData);
       }
 
       resetForm();
@@ -417,16 +539,21 @@ export default function App() {
 
   const exportToCSV = () => {
     const headers = ["Date", "Time", "Staff", "Visitor", "Mobile", "City", "Inquiry", "Notes"];
-    const rows = recentLeads.map(l => [
-      l.createdAt?.toDate ? l.createdAt.toDate().toLocaleDateString() : (typeof l.createdAt === 'string' ? new Date(l.createdAt).toLocaleDateString() : ''),
-      l.createdAt?.toDate ? l.createdAt.toDate().toLocaleTimeString() : (typeof l.createdAt === 'string' ? new Date(l.createdAt).toLocaleTimeString() : ''),
-      l.staffName,
-      l.name,
-      l.mobile,
-      l.city || '',
-      l.inquiry,
-      l.notes || ''
-    ]);
+    const rows = recentLeads.map(l => {
+      const d = new Date(l.createdAt);
+      const isValidDate = !isNaN(d.getTime());
+      
+      return [
+        isValidDate ? d.toLocaleDateString() : l.createdAt,
+        isValidDate ? d.toLocaleTimeString() : '',
+        l.staffName,
+        l.name,
+        l.mobile,
+        l.city || '',
+        l.inquiry,
+        l.notes || ''
+      ];
+    });
     
     const csvContent = [headers, ...rows].map(e => e.map(val => `"${val}"`).join(",")).join("\n");
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -781,6 +908,16 @@ export default function App() {
                           <div className="absolute inset-0 bg-navy-950/40 backdrop-blur-sm flex flex-col items-center justify-center text-white">
                             <GearLoader />
                             <p className="mt-2 text-[10px] font-black uppercase tracking-widest">Scanning Card...</p>
+                            <button 
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                cancelOCR();
+                              }}
+                              className="mt-4 px-4 py-2 bg-rose-500 hover:bg-rose-600 text-white text-[10px] font-black uppercase tracking-widest rounded-full transition-colors shadow-lg"
+                            >
+                              Cancel Scan
+                            </button>
                           </div>
                         )}
                         {isCompressing && (
@@ -967,10 +1104,10 @@ export default function App() {
                           >
                             <td className="px-6 py-4">
                               <div className="text-xs font-bold text-slate-900">
-                                {lead.createdAt?.toDate ? lead.createdAt.toDate().toLocaleDateString() : (typeof lead.createdAt === 'string' ? new Date(lead.createdAt).toLocaleDateString() : 'Just now')}
+                                {lead.createdAt ? new Date(lead.createdAt).toLocaleDateString() : 'Just now'}
                               </div>
                               <div className="text-[10px] font-medium text-slate-400">
-                                {lead.createdAt?.toDate ? lead.createdAt.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : (typeof lead.createdAt === 'string' ? new Date(lead.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '')}
+                                {lead.createdAt ? new Date(lead.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
                               </div>
                             </td>
                             <td className="px-6 py-4">
