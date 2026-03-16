@@ -43,7 +43,16 @@ function cn(...inputs: ClassValue[]) {
 }
 
 // Product categories
+const ELECTRICAL_SUBCATEGORIES = [
+  "Transformer",
+  "Switch gear",
+  "Transmission",
+  "Switches",
+  "Pannel Board"
+];
+
 const PRODUCT_CATEGORIES = [
+  "Electrical products",
   "Precision Brass Components",
   "Brass Valve",
   "Brass Fasteners",
@@ -61,11 +70,10 @@ const STAFF_NAMES = [
   "Sanjay Vekariya",
   "Narendra Kanjariya",
   "Pankaj Bhai",
-  "Staff 1",
-  "Staff 2",
-  "Staff 3",
-  "Staff 4",
-  "Staff 5"
+  "Deepak Ganerkar",
+  "Dixit Kanjariya",
+  "Bhargav Chandani",
+  "Neet Kanjariya"
 ];
 
 const VALID_USERS: Record<string, string> = {
@@ -137,6 +145,7 @@ export default function App() {
     mobile: '',
     city: '',
     inquiry: PRODUCT_CATEGORIES[0],
+    subInquiry: ELECTRICAL_SUBCATEGORIES[0],
     notes: '',
     cardImage: '',
     staffName: STAFF_NAMES[0]
@@ -304,6 +313,7 @@ export default function App() {
       mobile: '',
       city: '',
       inquiry: PRODUCT_CATEGORIES[0],
+      subInquiry: ELECTRICAL_SUBCATEGORIES[0],
       notes: '',
       cardImage: '',
       staffName: validStaffName
@@ -318,11 +328,21 @@ export default function App() {
       ? lead.staffName 
       : STAFF_NAMES[0];
       
+    let inquiry = lead.inquiry;
+    let subInquiry = ELECTRICAL_SUBCATEGORIES[0];
+    if (inquiry.startsWith('Electrical products - ')) {
+      subInquiry = inquiry.replace('Electrical products - ', '');
+      inquiry = 'Electrical products';
+    } else if (inquiry === 'Electrical products') {
+      subInquiry = ELECTRICAL_SUBCATEGORIES[0];
+    }
+      
     setFormData({
       name: lead.name,
       mobile: lead.mobile,
       city: lead.city || '',
-      inquiry: lead.inquiry,
+      inquiry: inquiry,
+      subInquiry: subInquiry,
       notes: lead.notes || '',
       cardImage: lead.cardImage || '',
       staffName: validStaffName
@@ -495,9 +515,19 @@ export default function App() {
     setError(null);
 
     try {
+      const finalInquiry = formData.inquiry === 'Electrical products' 
+        ? `Electrical products - ${formData.subInquiry}`
+        : formData.inquiry;
+
       const leadData: Lead = {
         id: editingLeadId || crypto.randomUUID(),
-        ...formData,
+        name: formData.name,
+        mobile: formData.mobile,
+        city: formData.city,
+        inquiry: finalInquiry,
+        notes: formData.notes,
+        cardImage: formData.cardImage,
+        staffName: formData.staffName,
         createdAt: editingLeadId ? (recentLeads.find(l => l.id === editingLeadId)?.createdAt || getISTDateTime()) : getISTDateTime()
       };
 
@@ -1035,6 +1065,24 @@ export default function App() {
                       </select>
                     </div>
                   </div>
+
+                  {formData.inquiry === 'Electrical products' && (
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">Sub Category</label>
+                      <div className="relative group">
+                        <FileText className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-300 group-focus-within:text-navy-600 transition-colors pointer-events-none" />
+                        <select 
+                          className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-4 pl-12 pr-4 focus:bg-white focus:border-navy-900 transition-all outline-none appearance-none font-bold text-navy-900"
+                          value={formData.subInquiry}
+                          onChange={e => setFormData({...formData, subInquiry: e.target.value})}
+                        >
+                          {ELECTRICAL_SUBCATEGORIES.map(cat => (
+                            <option key={cat} value={cat}>{cat}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Visiting Card Photo Section */}
                   <div className="space-y-3">
