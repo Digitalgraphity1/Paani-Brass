@@ -28,7 +28,8 @@ import {
   WifiOff,
   Settings,
   ChevronRight,
-  MapPin
+  MapPin,
+  Trash2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -97,6 +98,7 @@ export default function App() {
   const [lastSavedLead, setLastSavedLead] = useState<Lead | null>(null);
   const [recentLeads, setRecentLeads] = useState<Lead[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [leadToDelete, setLeadToDelete] = useState<Lead | null>(null);
   const [view, setView] = useState<'form' | 'success' | 'list'>('form');
   const [showCamera, setShowCamera] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
@@ -516,6 +518,51 @@ export default function App() {
       setError("Failed to save lead. Please check your connection.");
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleDeleteLead = async (lead: Lead, e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent opening the edit view
+    setLeadToDelete(lead);
+  };
+
+  const executeDelete = async () => {
+    if (!leadToDelete) return;
+    const lead = leadToDelete;
+    setLeadToDelete(null); // Close modal
+
+    if (!isOnline) {
+      setError("Deleting records is only available while online.");
+      return;
+    }
+
+    if (!WEBHOOK_URL) {
+      setError("Google Sheets Webhook URL is not configured.");
+      return;
+    }
+
+    try {
+      // Optimistically remove from UI
+      setRecentLeads(prev => prev.filter(l => l.id !== lead.id));
+      
+      await fetch(WEBHOOK_URL, {
+        method: 'POST',
+        mode: 'no-cors',
+        headers: {
+          'Content-Type': 'text/plain',
+        },
+        body: JSON.stringify({ 
+          action: 'delete', 
+          id: lead.id,
+          mobile: lead.mobile // Fallback identifier
+        })
+      });
+      
+      fetchLeads(); // Refresh list to ensure sync
+    } catch (err) {
+      console.error("Delete error:", err);
+      setError("Failed to delete lead. Please try again.");
+      fetchLeads(); // Revert optimistic update on failure
     }
   };
 
@@ -1093,6 +1140,7 @@ export default function App() {
                           <th className="px-6 py-4 text-[10px] font-black text-navy-400 uppercase tracking-widest">City</th>
                           <th className="px-6 py-4 text-[10px] font-black text-navy-400 uppercase tracking-widest">Inquiry</th>
                           <th className="px-6 py-4 text-[10px] font-black text-navy-400 uppercase tracking-widest">Card</th>
+                          <th className="px-6 py-4 text-[10px] font-black text-navy-400 uppercase tracking-widest text-right">Actions</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-50">
@@ -1159,6 +1207,15 @@ export default function App() {
                                 </div>
                               )}
                             </td>
+                            <td className="px-6 py-4 text-right">
+                              <button
+                                onClick={(e) => handleDeleteLead(lead, e)}
+                                className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-colors"
+                                title="Delete Record"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -1217,6 +1274,47 @@ export default function App() {
             
             <p className="text-white/40 text-[10px] font-bold text-center mt-6 uppercase tracking-[0.3em]">Align card within the frame</p>
             <canvas ref={canvasRef} className="hidden" />
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Delete Confirmation Modal */}
+      <AnimatePresence>
+        {leadToDelete && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-navy-950/80 backdrop-blur-sm"
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-[2rem] p-8 max-w-sm w-full shadow-2xl border border-slate-100"
+            >
+              <div className="w-16 h-16 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-6">
+                <Trash2 className="w-8 h-8 text-red-500" />
+              </div>
+              <h3 className="text-2xl font-black text-center text-navy-900 mb-2">Delete Record?</h3>
+              <p className="text-center text-slate-500 font-medium mb-8">
+                Are you sure you want to delete the record for <span className="font-bold text-navy-900">{leadToDelete.name}</span>? This action cannot be undone.
+              </p>
+              <div className="flex gap-4">
+                <button
+                  onClick={() => setLeadToDelete(null)}
+                  className="flex-1 py-4 rounded-2xl font-black text-slate-500 bg-slate-50 hover:bg-slate-100 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={executeDelete}
+                  className="flex-1 py-4 rounded-2xl font-black text-white bg-red-500 hover:bg-red-600 transition-colors shadow-lg shadow-red-200"
+                >
+                  Delete
+                </button>
+              </div>
+            </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
